@@ -56,10 +56,15 @@ def save_image_to_anki(img):
 
     try:
         invoke("storeMediaFile", filename=filename, data=b64data)
+        # Anki refuses to create a note whose first field (Front, for Basic)
+        # is empty -- it treats the whole note as "empty" and rejects it.
+        # Use a plain placeholder so the card is created; replace it with the
+        # real question later in Browse.
+        placeholder = f"(untitled - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
         note = {
             "deckName": DECK_NAME,
             "modelName": MODEL_NAME,
-            "fields": {"Front": "", "Back": f'<img src="{filename}">'},
+            "fields": {"Front": placeholder, "Back": f'<img src="{filename}">'},
             "options": {"allowDuplicate": True},
             "tags": [TAG],
         }
