@@ -12,6 +12,7 @@ import io
 import base64
 import time
 import sys
+import queue
 from datetime import datetime
 
 import requests
@@ -84,13 +85,19 @@ def capture_full_screen():
     save_image_to_anki(img)
 
 
-def capture_region():
-    root = tk.Tk()
-    root.attributes("-fullscreen", True)
-    root.attributes("-alpha", 0.3)
-    root.attributes("-topmost", True)
-    root.configure(bg="black")
-    canvas = tk.Canvas(root, cursor="cross", bg="grey11", highlightthickness=0)
+def capture_region(parent):
+    # Built as a Toplevel of the main-thread root, and only ever invoked from
+    # the main-thread queue poller below. Tkinter's event loop is not
+    # thread-safe on Windows -- creating/running it from the keyboard
+    # library's hotkey-callback thread caused drag (<B1-Motion>) events to
+    # get dropped, which made every region look "too small" and cancel.
+    overlay = tk.Toplevel(parent)
+    overlay.attributes("-fullscreen", True)
+    overlay.attributes("-alpha", 0.3)
+    overlay.attributes("-topmost", True)
+    overlay.configure(bg="black")
+    overlay.focus_force()
+    canvas = tk.Canvas(overlay, cursor="cross", bg="grey11", highlightthickness=0)
     canvas.pack(fill=tk.BOTH, expand=True)
 
     coords = {}
@@ -108,18 +115,19 @@ def capture_region():
 
     def on_release(event):
         coords["x2"], coords["y2"] = event.x, event.y
-        root.destroy()
+        overlay.destroy()
 
     def on_escape(event):
         coords.clear()
-        root.destroy()
+        overlay.destroy()
 
     canvas.bind("<ButtonPress-1>", on_press)
     canvas.bind("<B1-Motion>", on_drag)
     canvas.bind("<ButtonRelease-1>", on_release)
-    root.bind("<Escape>", on_escape)
+    overlay.bind("<Escape>", on_escape)
 
-    root.mainloop()
+    overlay.grab_set()
+    parent.wait_window(overlay)
 
     if "x2" not in coords:
         print("[info] Region capture cancelled.")
@@ -146,11 +154,32 @@ def main():
     print("Ctrl+C in this window = quit")
     print("--------------------------------")
 
-    keyboard.add_hotkey("f9", capture_full_screen)
-    keyboard.add_hotkey("f10", capture_region)
+    # Hotkeys fire on a background thread (owned by the `keyboard` package).
+    # Tkinter must run on the main thread, so hotkeys only enqueue a request
+    # here; a hidden root polls the queue and does the actual work.
+    actions = queue.Queue()
+    keyboard.add_hotkey("f9", lambda: actions.put("full"))
+    keyboard.add_hotkey("f10", lambda: actions.put("region"))
+
+    root = tk.Tk()
+    root.withdraw()  # no visible window; just keeps the main-thread loop alive
+
+    def poll_queue():
+        try:
+            while True:
+                action = actions.get_nowait()
+                if action == "full":
+                    capture_full_screen()
+                elif action == "region":
+                    capture_region(root)
+        except queue.Empty:
+            pass
+        root.after(100, poll_queue)
+
+    root.after(100, poll_queue)
 
     try:
-        keyboard.wait()
+        root.mainloop()
     except KeyboardInterrupt:
         print("\n[info] Exiting.")
         sys.exit(0)
