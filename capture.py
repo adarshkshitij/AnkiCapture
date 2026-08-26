@@ -14,6 +14,7 @@ import time
 import sys
 import queue
 import ctypes
+import winsound
 from datetime import datetime
 
 import requests
@@ -28,6 +29,52 @@ DECK_NAME = "001 Concepts"
 MODEL_NAME = "Basic"
 TAG = "screenshot-capture"
 # -----------------------------------------
+
+# Set once main() creates the hidden root Tk window; used by show_toast()
+# so save_image_to_anki() can pop a confirmation even when run.bat's cmd
+# window is minimized and the printed [ok]/[error] lines are out of sight.
+_root = None
+
+
+def show_toast(message, ok=True):
+    """Small always-on-top popup, bottom-right corner, auto-closes.
+    Also beeps, since the toast itself can still be missed if the user
+    isn't looking at the screen at that instant (e.g. watching a video).
+    """
+    try:
+        winsound.MessageBeep(winsound.MB_OK if ok else winsound.MB_ICONHAND)
+    except Exception:
+        pass
+
+    if _root is None:
+        return
+    try:
+        toast = tk.Toplevel(_root)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+        try:
+            toast.attributes("-alpha", 0.92)
+        except Exception:
+            pass
+
+        bg = "#1e5c2e" if ok else "#5c1e1e"
+        fg = "#ffffff"
+        label = tk.Label(
+            toast, text=message, bg=bg, fg=fg,
+            font=("Segoe UI", 11), padx=16, pady=10, justify="left",
+        )
+        label.pack()
+
+        toast.update_idletasks()
+        w, h = toast.winfo_width(), toast.winfo_height()
+        sw, sh = toast.winfo_screenwidth(), toast.winfo_screenheight()
+        x = sw - w - 24
+        y = sh - h - 60
+        toast.geometry(f"{w}x{h}+{x}+{y}")
+
+        toast.after(1600, toast.destroy)
+    except Exception:
+        pass
 
 
 def invoke(action, **params):
@@ -73,9 +120,11 @@ def save_image_to_anki(img):
         }
         note_id = invoke("addNote", note=note)
         print(f'[ok] Saved card {note_id} -> deck "{DECK_NAME}" (image: {filename})')
+        show_toast(f"✅ Saved to Anki\n{DECK_NAME}", ok=True)
     except Exception as e:
         print(f"[error] Failed to save card: {e}")
         print("        Is Anki open with AnkiConnect enabled?")
+        show_toast("❌ Anki save failed\nIs Anki open?", ok=False)
 
 
 def capture_full_screen():
@@ -206,8 +255,10 @@ def main():
     keyboard.add_hotkey("f9", lambda: actions.put("full"))
     keyboard.add_hotkey("f10", lambda: actions.put("region"))
 
+    global _root
     root = tk.Tk()
     root.withdraw()  # no visible window; just keeps the main-thread loop alive
+    _root = root
     overlay, canvas = build_region_overlay(root)
 
     def poll_queue():
