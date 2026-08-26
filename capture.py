@@ -10,10 +10,12 @@ Requires: Anki running, with the "AnkiConnect" add-on installed and enabled.
 
 import io
 import base64
+import re
 import time
 import sys
 import queue
 import ctypes
+import threading
 import winsound
 from datetime import datetime
 
@@ -34,6 +36,11 @@ TAG = "screenshot-capture"
 # so save_image_to_anki() can pop a confirmation even when run.bat's cmd
 # window is minimized and the printed [ok]/[error] lines are out of sight.
 _root = None
+
+# Extra tag layered on top of the base TAG below, e.g. "html" / "css" / "js".
+# Set by typing a word + Enter into the terminal while the tool is running
+# (see stdin_tag_listener); stays in effect until changed again or cleared.
+current_topic_tag = None
 
 
 def show_toast(message, ok=True):
@@ -111,16 +118,17 @@ def save_image_to_anki(img):
         # Use a plain placeholder so the card is created; replace it with the
         # real question later in Browse.
         placeholder = f"(untitled - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
+        tags = [TAG] + ([current_topic_tag] if current_topic_tag else [])
         note = {
             "deckName": DECK_NAME,
             "modelName": MODEL_NAME,
             "fields": {"Front": placeholder, "Back": f'<img src="{filename}">'},
             "options": {"allowDuplicate": True},
-            "tags": [TAG],
+            "tags": tags,
         }
         note_id = invoke("addNote", note=note)
-        print(f'[ok] Saved card {note_id} -> deck "{DECK_NAME}" (image: {filename})')
-        show_toast(f"✅ Saved to Anki\n{DECK_NAME}", ok=True)
+        print(f'[ok] Saved card {note_id} -> deck "{DECK_NAME}" tags={tags} (image: {filename})')
+        show_toast(f"✅ Saved to Anki\n{DECK_NAME}  [{', '.join(tags)}]", ok=True)
     except Exception as e:
         print(f"[error] Failed to save card: {e}")
         print("        Is Anki open with AnkiConnect enabled?")
@@ -239,12 +247,42 @@ def capture_region(overlay, canvas):
     save_image_to_anki(img)
 
 
+def _normalize_tag(raw):
+    # Anki tags can't contain spaces -- turn "CSS Basics" into "css-basics"
+    # so whatever the user types always lands as one valid tag.
+    tag = raw.strip().lower()
+    tag = re.sub(r"\s+", "-", tag)
+    tag = re.sub(r"[^a-z0-9\-_]", "", tag)
+    return tag
+
+
+def stdin_tag_listener(actions):
+    # Runs on its own daemon thread so typing in the terminal never blocks
+    # the hotkey thread or the Tkinter main loop. Lines typed here just get
+    # handed off through the same queue poll_queue() already drains.
+    while True:
+        try:
+            line = input()
+        except (EOFError, OSError):
+            return  # terminal closed / not interactive
+        line = line.strip()
+        if not line or line.lower() == "clear":
+            actions.put(("tag", None))
+            continue
+        tag = _normalize_tag(line)
+        if tag:
+            actions.put(("tag", tag))
+
+
 def main():
     print("=== Anki Screenshot Capture ===")
     print(f'Deck: "{DECK_NAME}"  |  Note type: "{MODEL_NAME}"')
     ensure_deck_exists()
     print("F9  = capture FULL screen")
     print("F10 = drag-select a REGION (Esc to cancel selection)")
+    print(f'Type a topic (e.g. "html") + Enter any time -> tags future captures with it too.')
+    print('Type "clear" + Enter to go back to just the base tag.')
+    print(f'Currently no topic tag set (base tag "{TAG}" always applies).')
     print("Ctrl+C in this window = quit")
     print("--------------------------------")
 
@@ -254,6 +292,7 @@ def main():
     actions = queue.Queue()
     keyboard.add_hotkey("f9", lambda: actions.put("full"))
     keyboard.add_hotkey("f10", lambda: actions.put("region"))
+    threading.Thread(target=stdin_tag_listener, args=(actions,), daemon=True).start()
 
     global _root
     root = tk.Tk()
@@ -262,6 +301,7 @@ def main():
     overlay, canvas = build_region_overlay(root)
 
     def poll_queue():
+        global current_topic_tag
         try:
             while True:
                 action = actions.get_nowait()
@@ -269,6 +309,12 @@ def main():
                     capture_full_screen()
                 elif action == "region":
                     capture_region(overlay, canvas)
+                elif isinstance(action, tuple) and action[0] == "tag":
+                    current_topic_tag = action[1]
+                    if current_topic_tag:
+                        print(f'[tag] Topic tag set to "{current_topic_tag}" -- future captures will include it.')
+                    else:
+                        print(f'[tag] Topic tag cleared -- only base tag "{TAG}" applies now.')
         except queue.Empty:
             pass
         root.after(100, poll_queue)

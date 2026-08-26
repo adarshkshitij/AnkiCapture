@@ -54,11 +54,13 @@ No cloud services, no third-party servers — everything stays on your machine a
 3. While watching your lecture / reading material:
    - Press **F9** to capture the full screen.
    - Press **F10**, then drag a box around a specific region. Press **Esc** to cancel a selection.
-4. Each capture prints a confirmation in the terminal and appears immediately as a new card in Anki.
-5. When you're done, press **Ctrl+C** in the terminal to stop the listener.
-6. Later, in Anki's **Browse** tab, filter for the capture tag and fill in the `Front` field for each card:
+4. Each capture prints a confirmation in the terminal, shows a short popup + beep, and appears immediately as a new card in Anki.
+5. **Optional topic tag**: type a word (e.g. `html`, `css`, `js`) + **Enter** directly into the terminal at any time — every capture from then on gets tagged with it too, on top of the base tag, until you change it again. Type `clear` + Enter to go back to just the base tag.
+6. When you're done, press **Ctrl+C** in the terminal to stop the listener.
+7. Later, in Anki's **Browse** tab, filter for the capture tag (and/or a topic tag you set) and fill in the `Front` field for each card:
    ```
    tag:screenshot-capture
+   tag:screenshot-capture tag:html
    ```
 
 > If hotkeys don't register (some apps run elevated and block global hooks), try running your terminal / `run.bat` as Administrator.
