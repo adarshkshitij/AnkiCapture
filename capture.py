@@ -22,7 +22,8 @@ from datetime import datetime
 import requests
 import keyboard
 import mouse
-from PIL import ImageGrab
+import mss
+from PIL import Image
 import tkinter as tk
 
 # ---------------- Config ----------------
@@ -135,12 +136,25 @@ def save_image_to_anki(img):
         show_toast("❌ Anki save failed\nIs Anki open?", ok=False)
 
 
+def _grab_mss(bbox=None):
+    # `mss` grabs pixel-accurate, DPI-correct screenshots and handles
+    # multi-monitor virtual-desktop offsets (including negative coordinates
+    # when a secondary monitor sits left of/above the primary) -- this and
+    # the SetProcessDpiAwareness() call in main() together fix drag-selected
+    # regions coming out shifted/wrong-sized on scaled displays.
+    with mss.mss() as sct:
+        if bbox is None:
+            monitor = sct.monitors[0]  # index 0 = full virtual desktop, all monitors
+        else:
+            left, top, right, bottom = bbox
+            monitor = {"left": left, "top": top, "width": right - left, "height": bottom - top}
+        shot = sct.grab(monitor)
+        return Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+
+
 def capture_full_screen():
     time.sleep(0.2)  # let the hotkey keys release before grabbing
-    try:
-        img = ImageGrab.grab(all_screens=True)
-    except TypeError:
-        img = ImageGrab.grab()  # older Pillow without all_screens support
+    img = _grab_mss()
     save_image_to_anki(img)
 
 
@@ -243,7 +257,7 @@ def capture_region(overlay, canvas):
         return
 
     time.sleep(0.15)
-    img = ImageGrab.grab(bbox=(left, top, right, bottom))
+    img = _grab_mss(bbox=(left, top, right, bottom))
     save_image_to_anki(img)
 
 
@@ -274,7 +288,24 @@ def stdin_tag_listener(actions):
             actions.put(("tag", tag))
 
 
+def _set_dpi_aware():
+    # Without this, a non-DPI-aware process gets virtualized mouse/window
+    # coordinates from Windows on any scaled display (125%, 150%, ...) --
+    # mouse.get_position(), Tkinter's own geometry, and the screen grab end
+    # up disagreeing with each other, which is what made F10 drag-selects
+    # come out shifted/wrong-sized. Must be called before any Tk window or
+    # mouse/screen call.
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()  # fallback, older Windows
+        except Exception:
+            pass
+
+
 def main():
+    _set_dpi_aware()
     print("=== Anki Screenshot Capture ===")
     print(f'Deck: "{DECK_NAME}"  |  Note type: "{MODEL_NAME}"')
     ensure_deck_exists()
